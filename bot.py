@@ -1,19 +1,29 @@
 import asyncio
 import base64
 import boto3
-from dotenv import load_dotenv
 import os
 import spotipy
 import logging
 import re
+import traceback
+import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from spotipy.oauth2 import SpotifyOAuth
 
 
 # Load environment variables and configure logging
-load_dotenv()
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+if logging.getLogger().hasHandlers():
+    logging.getLogger().setLevel(logging.INFO)
+else:
+    logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
+
+
+def lambda_handler(event, context):
+     logger.info(f"Event body type: {type(event['body'])}")
+     logger.info(f"Event body content: {event['body']}")
+     return asyncio.get_event_loop().run_until_complete(main(event, context))
 
 
 dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
@@ -38,6 +48,9 @@ def get_playlist_from_dynamodb(chat_id):
         return None
 
 # Spotify API credentials and initialization
+TOKEN = os.getenv('TELERGRAM_BOT_TOKEN')
+application = Application.builder().token(TOKEN).build()   
+
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
 SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI')
@@ -225,9 +238,8 @@ async def send_playlist_link(update: Update, context: CallbackContext) -> None:
 async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text("Hiya! I'm your Spotify Skunk bot 🦨. /createplaylist so I can add spotify links as tracks in your playlist! ")
 
-def main():
-    TOKEN = os.getenv('TELERGRAM_BOT_TOKEN')
-    application = Application.builder().token(TOKEN).build()
+async def main(event, context):
+
 
     # Define and add handlers
     handlers = [
@@ -246,7 +258,30 @@ def main():
     for handler in handlers:
         application.add_handler(handler)
 
-    application.run_polling()
+    
+    # Convert the incoming event to a Telegram Update object
+    if isinstance(event['body'], str):
+        body = json.loads(event['body'])
+    else:
+        body = event['body']
+
+         
+    try:    
+        await application.initialize()
+        await application.process_update(Update.de_json(body, application.bot))
+    
+        return {
+            'statusCode': 200,
+            'body': json.dumps('Success')
+        }
+
+    except Exception as exc:
+        logger.exception('Error processing update')
+        return {
+            'statusCode': 500,
+            'body': f'Error processing update: {traceback.format_exc()}'
+        }
+
 
 if __name__ == '__main__':
     main()

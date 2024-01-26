@@ -1,3 +1,6 @@
 # .gitignore content
 .env
 bot-env/
+dependencies/
+setWebhook.sh
+```
