@@ -18,10 +18,17 @@ from telegram.ext import (
 )
 from spotipy.oauth2 import SpotifyOAuth, CacheHandler
 from spotipy.exceptions import SpotifyException
-
+import urllib.parse
 # user id connected to the channelCredentials info then have it reset when the playlist is reset
 # unlink function to remoove their credirtials
 # pretty success screem
+# reset playlist -> replaceplaylist lets you make a new playlist
+# unlink deletes both tables
+# update the cache save to acceept user_id for getOauth
+# check user_id and see if it machtes the one saved in the table
+
+# fix the path of the first time linking account function
+
 
 # Load environment variables and configure logging
 if logging.getLogger().hasHandlers():
@@ -47,13 +54,20 @@ def lambda_handler(event, context):
 
 
 def handle_spotify_auth(event):
-    chat_id = event["queryStringParameters"].get("state")
+    # chat_id = event["queryStringParameters"].get("state")
+    state_encoded = event["queryStringParameters"].get("state")
     code = event["queryStringParameters"].get("code")
 
-    if not chat_id or not code:
+    if not state_encoded or not code:
         return {"statusCode": 400, "body": "Missing required parameters"}
 
-    sp_oauth = get_sp_oauth(chat_id)
+    # Decoding the state
+    state_decoded = urllib.parse.unquote(state_encoded)
+    state_info = json.loads(state_decoded)
+    chat_id = state_info.get("chat_id")
+    user_id = state_info.get("user_id")
+
+    sp_oauth = get_sp_oauth(chat_id, user_id)
     token_info = sp_oauth.get_access_token(code)
 
     if token_info:
@@ -136,6 +150,21 @@ def get_playlist_from_dynamodb(chat_id):
         return None
 
 
+def get_user_id_from_chat_id(chat_id):
+    try:
+        response = bot_table.get_item(Key={"chat_id": str(chat_id)})
+        if "Item" in response and "user_id" in response["Item"]:
+            return response["Item"]["user_id"]
+        else:
+            logging.info(f"No user_id found for chat_id: {chat_id}")
+            return None
+    except Exception as e:
+        logging.error(
+            f"Error retrieving user ID from DynamoDB for chat_id: {chat_id}, error: {e}"
+        )
+        return None
+
+
 # Spotify API credentials and initialization
 TOKEN = os.getenv("TELERGRAM_BOT_TOKEN")
 application = Application.builder().token(TOKEN).build()
@@ -145,12 +174,12 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 
 
-def get_sp_oauth(chat_id):
+def get_sp_oauth(chat_id, user_id):
     return SpotifyOAuth(
         SPOTIFY_CLIENT_ID,
         SPOTIFY_CLIENT_SECRET,
         SPOTIFY_REDIRECT_URI,
-        cache_handler=DynamoCredentialsCache(chat_id),
+        cache_handler=DynamoCredentialsCache(chat_id, user_id),
         scope="playlist-modify-public ugc-image-upload",
     )
 
@@ -164,8 +193,9 @@ class DynamoCredentialsCache(CacheHandler):
     'ChannelCredentials' that has a primary key of chat_id.
     """
 
-    def __init__(self, chat_id):
+    def __init__(self, chat_id, user_id):
         self.chat_id = chat_id
+        self.user_id = user_id
 
     def get_cached_token(self):
         try:
@@ -180,7 +210,16 @@ class DynamoCredentialsCache(CacheHandler):
     def save_token_to_cache(self, token_info):
         try:
             credentials_table.put_item(
-                Item={"chat_id": str(self.chat_id), **token_info}
+                Item={
+                    "chat_id": str(self.chat_id),
+                    "user_id": self.user_id,
+                    **token_info,
+                }
+            )
+            bot_table.update_item(
+                Key={"chat_id": str(self.chat_id)},
+                UpdateExpression="SET user_id = :uid",
+                ExpressionAttributeValues={":uid": str(self.user_id)},
             )
         except Exception as e:
             logging.error(f"Error saving to DynamoDB: {e}")
@@ -225,6 +264,7 @@ def create_spotify_playlist(playlist_name, sp_oauth):
 
 async def handle_playlist_image(update: Update, context: CallbackContext) -> None:
     chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
     current_state = get_current_state(chat_id)
 
     if (
@@ -249,7 +289,7 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
                 return
 
             async def upload_image():
-                sp_oauth = get_sp_oauth(chat_id)
+                sp_oauth = get_sp_oauth(chat_id, user_id)
                 sp = spotipy.Spotify(auth_manager=sp_oauth)
                 sp.playlist_upload_cover_image(playlist_id, base64_image)
 
@@ -277,10 +317,14 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
 async def handle_playlist_name(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text("got to handle_playlist_name")
     chat_id = update.effective_chat.id
+    # user_id = update.effective_user.id
+    user_id = get_user_id_from_chat_id(chat_id)
+    await update.message.reply_text(f"user_id in playlist: {user_id}")
     await update.message.reply_text(f"chat_id: {chat_id}")
     current_state = get_current_state(chat_id)
-    sp_oauth = get_sp_oauth(chat_id)
+    sp_oauth = get_sp_oauth(chat_id, user_id)
     await update.message.reply_text(f"current State: {current_state}")
+
     if current_state == BotState.CHANGING_PLAYLIST_NAME:
         await update.message.reply_text("got to if changing_playlist_name")
         playlist_id = get_playlist_from_dynamodb(chat_id)
@@ -324,6 +368,7 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
 
 async def handle_spotify_links(update: Update, context: CallbackContext) -> None:
     chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
     message_text = update.message.text
     match = re.search(spotify_link_pattern, message_text)
     current_state = get_current_state(chat_id)
@@ -335,7 +380,7 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
     playlist_id = get_playlist_from_dynamodb(chat_id)
     if match and playlist_id:
         track_id = match.group(1)
-        sp_oauth = get_sp_oauth(chat_id)
+        sp_oauth = get_sp_oauth(chat_id, user_id)
         if add_track_to_spotify_playlist(playlist_id, track_id, sp_oauth):
             await update.message.reply_text("Added Spotify track to your playlist!")
             await update.message.reply_text("🦨 ❤️ 🎶")
@@ -380,6 +425,12 @@ async def change_playlist_name(update: Update, context: CallbackContext) -> None
 
 async def create_playlist(update: Update, context: CallbackContext) -> bool:
     chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+
+    state_info = {"chat_id": str(chat_id), "user_id": str(user_id)}
+    state_encoded = json.dumps(state_info)
+    state_url_safe = urllib.parse.quote(state_encoded)
+
     playlist_id = get_playlist_from_dynamodb(chat_id)
 
     current_state = get_current_state(chat_id)
@@ -397,10 +448,10 @@ async def create_playlist(update: Update, context: CallbackContext) -> bool:
         return False
 
     save_current_state(chat_id, BotState.CREATING_PLAYLIST)
-    sp_oauth = get_sp_oauth(chat_id)
+    sp_oauth = get_sp_oauth(chat_id, user_id)
     tokinfo = sp_oauth.cache_handler.get_cached_token()
     if sp_oauth.validate_token(tokinfo) is None:
-        auth_url = sp_oauth.get_authorize_url(state=chat_id)
+        auth_url = sp_oauth.get_authorize_url(state=state_url_safe)
         await update.message.reply_text(f"click this:{auth_url}")
     else:
         await update.message.reply_text("Please enter a name for your new playlist:")
@@ -415,6 +466,7 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         "/changeplaylistname - Change the name of the current playlist\n"
         "/changeplaylistimage - Change the image of the current playlist\n"
         "/resetplaylist - Reset so you can create a new playlist\n"
+        "/unlink - Unlink your Spotify credentials\n"
         "/playlistlink - Get the link to the current playlist\n"
         "/help - Show this help message\n"
         "\nJust send me a Spotify track link to add it to your playlist!"
@@ -452,6 +504,21 @@ async def start(update: Update, context: CallbackContext) -> None:
     )
 
 
+async def unlink_credentials(update: Update, context: CallbackContext) -> None:
+    chat_id = update.effective_chat.id
+    try:
+        credentials_table.delete_item(Key={"chat_id": str(chat_id)})
+        bot_table.delete_item(Key={"chat_id": str(chat_id)})
+        await update.message.reply_text(
+            "Your Spotify credentials have been unlinked successfully."
+        )
+    except Exception as e:
+        logger.error(f"Error unlinking Spotify credentials for chat_id {chat_id}: {e}")
+        await update.message.reply_text(
+            "Failed to unlink your Spotify credentials. Please try again later."
+        )
+
+
 async def main(event, context):
     # Define and add handlers
     handlers = [
@@ -462,6 +529,7 @@ async def main(event, context):
         CommandHandler("changeplaylistname", change_playlist_name),
         CommandHandler("changeplaylistimage", change_playlist_image),
         CommandHandler("playlistlink", send_playlist_link),
+        CommandHandler("unlink", unlink_credentials),
         MessageHandler(
             filters.TEXT & filters.Regex(spotify_link_pattern), handle_spotify_links
         ),
