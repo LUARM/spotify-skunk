@@ -19,16 +19,6 @@ from telegram.ext import (
 from spotipy.oauth2 import SpotifyOAuth, CacheHandler
 from spotipy.exceptions import SpotifyException
 import urllib.parse
-# user id connected to the channelCredentials info then have it reset when the playlist is reset
-# unlink function to remoove their credirtials
-# pretty success screem
-# reset playlist -> replaceplaylist lets you make a new playlist
-# unlink deletes both tables
-# update the cache save to acceept user_id for getOauth
-# check user_id and see if it machtes the one saved in the table
-
-# fix the path of the first time linking account function
-
 
 # Load environment variables and configure logging
 if logging.getLogger().hasHandlers():
@@ -36,6 +26,11 @@ if logging.getLogger().hasHandlers():
 else:
     logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
+
+
+def load_html_file(file_name):
+    with open(os.path.join("html", file_name), encoding="utf-8") as file:
+        return file.read()
 
 
 def lambda_handler(event, context):
@@ -54,7 +49,6 @@ def lambda_handler(event, context):
 
 
 def handle_spotify_auth(event):
-    # chat_id = event["queryStringParameters"].get("state")
     state_encoded = event["queryStringParameters"].get("state")
     code = event["queryStringParameters"].get("code")
 
@@ -69,13 +63,19 @@ def handle_spotify_auth(event):
 
     sp_oauth = get_sp_oauth(chat_id, user_id)
     token_info = sp_oauth.get_access_token(code)
-
+    html_content = load_html_file("index.html")
     if token_info:
         logger.info(f"Spotify access token successfully retrieved: {token_info}")
     else:
         logger.error("Failed to retrieve Spotify access token")
 
-    return {"statusCode": 200, "body": json.dumps(event, indent=2)}
+    # For logging:
+    # return {"statusCode": 200, "body": json.dumps(event, indent=2)}
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "text/html"},
+        "body": html_content,
+    }
 
 
 # -----------------------------------------------
@@ -251,7 +251,7 @@ def change_spotify_playlist_name(playlist_id, new_name, sp_oauth):
     except SpotifyException as e:
         logging.error(f"Spotify API error in changing playlist name: {e}")
         return False
-    except Exception as e:  # Broad catch for debugging
+    except Exception as e:
         logging.error(f"Error in changing playlist name: {e}")
 
 
@@ -265,6 +265,12 @@ def create_spotify_playlist(playlist_name, sp_oauth):
 async def handle_playlist_image(update: Update, context: CallbackContext) -> None:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
+    user_id_table = get_user_id_from_chat_id(chat_id)
+    if user_id_table != str(user_id):
+        await update.message.reply_text(
+            "You are not authorized for this playlist process."
+        )
+        return
     current_state = get_current_state(chat_id)
 
     if (
@@ -315,18 +321,18 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
 
 
 async def handle_playlist_name(update: Update, context: CallbackContext) -> None:
-    await update.message.reply_text("got to handle_playlist_name")
     chat_id = update.effective_chat.id
-    # user_id = update.effective_user.id
-    user_id = get_user_id_from_chat_id(chat_id)
-    await update.message.reply_text(f"user_id in playlist: {user_id}")
-    await update.message.reply_text(f"chat_id: {chat_id}")
+    user_id = update.effective_user.id
+    user_id_table = get_user_id_from_chat_id(chat_id)
+    if user_id_table != str(user_id):
+        await update.message.reply_text(
+            "You are not authorized for this playlist process."
+        )
+        return
     current_state = get_current_state(chat_id)
     sp_oauth = get_sp_oauth(chat_id, user_id)
-    await update.message.reply_text(f"current State: {current_state}")
 
     if current_state == BotState.CHANGING_PLAYLIST_NAME:
-        await update.message.reply_text("got to if changing_playlist_name")
         playlist_id = get_playlist_from_dynamodb(chat_id)
         if playlist_id:
             new_name = update.message.text.strip()
@@ -342,14 +348,12 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
                 "Make sure you have a playlist created before changing the name."
             )
     elif current_state == BotState.CREATING_PLAYLIST:
-        await update.message.reply_text("got to creating_playlist")
         await update.message.reply_text(
             f"create playlist state exists: {current_state}"
         )
         playlist_name = update.message.text.strip()
         try:
             playlist_id = create_spotify_playlist(playlist_name, sp_oauth)
-            await update.message.reply_text(f"playlistid: {playlist_id}")
             save_playlist_to_dynamodb(chat_id, playlist_id)
             save_current_state(chat_id, BotState.AWAITING_PLAYLIST_IMAGE)
             await update.message.reply_text(
@@ -362,7 +366,6 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
             )
         return
     else:
-        await update.message.reply_text("got to return nada")
         return
 
 
@@ -374,7 +377,7 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
     current_state = get_current_state(chat_id)
     if current_state == BotState.CREATING_PLAYLIST:
         await update.message.reply_text(
-            "You are in the process of creating a playlist. Please wait until it's done before seding links."
+            "You are in the process of creating a playlist. Please wait until it's done before sending links."
         )
         return
     playlist_id = get_playlist_from_dynamodb(chat_id)
@@ -449,10 +452,13 @@ async def create_playlist(update: Update, context: CallbackContext) -> bool:
 
     save_current_state(chat_id, BotState.CREATING_PLAYLIST)
     sp_oauth = get_sp_oauth(chat_id, user_id)
-    tokinfo = sp_oauth.cache_handler.get_cached_token()
-    if sp_oauth.validate_token(tokinfo) is None:
+    token_info = sp_oauth.cache_handler.get_cached_token()
+    if sp_oauth.validate_token(token_info) is None:
         auth_url = sp_oauth.get_authorize_url(state=state_url_safe)
-        await update.message.reply_text(f"click this:{auth_url}")
+        await update.message.reply_text(f"click this to authorize the bot:{auth_url}")
+        await update.message.reply_text(
+            "Enter a name for your new playlist after authorizing:"
+        )
     else:
         await update.message.reply_text("Please enter a name for your new playlist:")
     return True

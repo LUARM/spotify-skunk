@@ -23,7 +23,7 @@ then
 fi
 
 rm -f $ZIP_FILE
-zip $ZIP_FILE *.py
+zip -r $ZIP_FILE *.py html/
 
 # Append the contents of the 'dependencies' directory at the root of the zip file
 if [ -d "dependencies" ]; then
