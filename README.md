@@ -35,8 +35,8 @@ Before you start using Spotify Skunk Bot, make sure you have the following:
 ### AWS Configuration
 
 1. Create a new Lambda function for your bot.
-2. Set up a DynamoDB table named `SpotifySkunk` with `chat_id` as the primary key.
-3. Deploy the bot code to AWS Lambda.
+2. Set up a DynamoDB table named `SpotifySkunk` and `ChannelCredentials` with `chat_id` as the primary key. 
+4. Deploy the bot code to AWS Lambda.
 
 ### Environment Variables
 
@@ -59,6 +59,8 @@ After deploying the bot, start a conversation with it on Telegram or add it to a
 - `/changeplaylistname`: Change the name of the current playlist.
 - `/changeplaylistimage`: Change the cover image of the current playlist.
 - `/playlistlink`: Get the link to the current playlist.
+- `/unlink`: Unlink your Spotify credentials.
+- `/resetplaylist`: Reset so you can create a new playlist.
 
 ## Contributing
 
