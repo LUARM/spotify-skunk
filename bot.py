@@ -27,10 +27,27 @@ else:
     logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
+# Constants and configurations
+TOKEN = os.getenv("TELERGRAM_BOT_TOKEN")
+application = Application.builder().token(TOKEN).build()
+# Spotify
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
+spotify_link_pattern = r"https://open\.spotify\.com/track/([a-zA-Z0-9]+)"
+# Dynamodb
+dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+bot_table = dynamodb.Table("SpotifySkunk")
+credentials_table = dynamodb.Table("ChannelCredentials")
 
-def load_html_file(file_name):
-    with open(os.path.join("html", file_name), encoding="utf-8") as file:
-        return file.read()
+
+# Enums for bot states
+class BotState(Enum):
+    AWAITING_PLAYLIST_IMAGE = "awaiting_playlist_image"
+    CHANGING_PLAYLIST_NAME = "changing_playlist_name"
+    CREATING_PLAYLIST = "creating_playlist"
+    CHANGING_PLAYLIST_IMAGE = "changing_playlist_image"
+    NO_STATE = None
 
 
 def lambda_handler(event, context):
@@ -48,13 +65,17 @@ def lambda_handler(event, context):
         return {"statusCode": 404, "body": "no handler for this request"}
 
 
+def load_html_file(file_name):
+    with open(os.path.join("html", file_name), encoding="utf-8") as file:
+        return file.read()
+
+
 def handle_spotify_auth(event):
     state_encoded = event["queryStringParameters"].get("state")
     code = event["queryStringParameters"].get("code")
 
     if not state_encoded or not code:
         return {"statusCode": 400, "body": "Missing required parameters"}
-
     # Decoding the state
     state_decoded = urllib.parse.unquote(state_encoded)
     state_info = json.loads(state_decoded)
@@ -68,7 +89,6 @@ def handle_spotify_auth(event):
         logger.info(f"Spotify access token successfully retrieved: {token_info}")
     else:
         logger.error("Failed to retrieve Spotify access token")
-
     # For logging:
     # return {"statusCode": 200, "body": json.dumps(event, indent=2)}
     return {
@@ -81,21 +101,6 @@ def handle_spotify_auth(event):
 # -----------------------------------------------
 # DynamoDB Utility Functions
 # -----------------------------------------------
-
-
-class BotState(Enum):
-    AWAITING_PLAYLIST_IMAGE = "awaiting_playlist_image"
-    CHANGING_PLAYLIST_NAME = "changing_playlist_name"
-    CREATING_PLAYLIST = "creating_playlist"
-    CHANGING_PLAYLIST_IMAGE = "changing_playlist_image"
-    NO_STATE = None
-
-
-dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-bot_table = dynamodb.Table("SpotifySkunk")
-credentials_table = dynamodb.Table("ChannelCredentials")
-
-
 def save_current_state(chat_id, state_key: BotState):
     # Saves the current bot state for a given chat_id in DynamoDB.
     try:
@@ -165,28 +170,6 @@ def get_user_id_from_chat_id(chat_id):
         return None
 
 
-# Spotify API credentials and initialization
-TOKEN = os.getenv("TELERGRAM_BOT_TOKEN")
-application = Application.builder().token(TOKEN).build()
-
-SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
-
-
-def get_sp_oauth(chat_id, user_id):
-    return SpotifyOAuth(
-        SPOTIFY_CLIENT_ID,
-        SPOTIFY_CLIENT_SECRET,
-        SPOTIFY_REDIRECT_URI,
-        cache_handler=DynamoCredentialsCache(chat_id, user_id),
-        scope="playlist-modify-public ugc-image-upload",
-    )
-
-
-spotify_link_pattern = r"https://open\.spotify\.com/track/([a-zA-Z0-9]+)"
-
-
 class DynamoCredentialsCache(CacheHandler):
     """
     A cache handler that stores OAuth credentials in a Dynamo bot_table called
@@ -228,6 +211,14 @@ class DynamoCredentialsCache(CacheHandler):
 # -----------------------------------------------
 # Spotify Utility Functions
 # -----------------------------------------------
+def get_sp_oauth(chat_id, user_id):
+    return SpotifyOAuth(
+        SPOTIFY_CLIENT_ID,
+        SPOTIFY_CLIENT_SECRET,
+        SPOTIFY_REDIRECT_URI,
+        cache_handler=DynamoCredentialsCache(chat_id, user_id),
+        scope="playlist-modify-public ugc-image-upload",
+    )
 
 
 def add_track_to_spotify_playlist(playlist_id, track_id, sp_oauth):
@@ -262,6 +253,9 @@ def create_spotify_playlist(playlist_name, sp_oauth):
     return playlist["id"]
 
 
+# -----------------------------------------------
+# Telegram Message Handlers
+# -----------------------------------------------
 async def handle_playlist_image(update: Update, context: CallbackContext) -> None:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -272,7 +266,6 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
         )
         return
     current_state = get_current_state(chat_id)
-
     if (
         current_state == BotState.AWAITING_PLAYLIST_IMAGE
         or current_state == BotState.CHANGING_PLAYLIST_IMAGE
@@ -357,7 +350,8 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
             save_playlist_to_dynamodb(chat_id, playlist_id)
             save_current_state(chat_id, BotState.AWAITING_PLAYLIST_IMAGE)
             await update.message.reply_text(
-                f"Created new playlist: {playlist_name}. Now please send me a cool image to set as your playlist cover 😎."
+                f"Created new playlist: {playlist_name}. "
+                "Now please send me a cool image to set as your playlist cover 😎."
             )
         except Exception as e:
             logging.error(f"Error creating playlist: {e}")
@@ -377,7 +371,8 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
     current_state = get_current_state(chat_id)
     if current_state == BotState.CREATING_PLAYLIST:
         await update.message.reply_text(
-            "You are in the process of creating a playlist. Please wait until it's done before sending links."
+            "You are in the process of creating a playlist. "
+            "Please wait until it's done before sending links."
         )
         return
     playlist_id = get_playlist_from_dynamodb(chat_id)
@@ -389,7 +384,8 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
             await update.message.reply_text("🦨 ❤️ 🎶")
         else:
             await update.message.reply_text(
-                "Failed to add the track. Make sure you have the correct permissions or that the Playlist still exist."
+                "Failed to add the track. Make sure you have the correct permissions "
+                "or that the Playlist still exist."
             )
     else:
         await update.message.reply_text(
@@ -400,8 +396,6 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
 # -----------------------------------------------
 # Telegram Command Handlers
 # -----------------------------------------------
-
-
 async def change_playlist_image(update: Update, context: CallbackContext) -> None:
     chat_id = update.effective_chat.id
     playlist_id = get_playlist_from_dynamodb(chat_id)
@@ -449,7 +443,6 @@ async def create_playlist(update: Update, context: CallbackContext) -> bool:
             "You are already in the process of creating a playlist."
         )
         return False
-
     save_current_state(chat_id, BotState.CREATING_PLAYLIST)
     sp_oauth = get_sp_oauth(chat_id, user_id)
     token_info = sp_oauth.cache_handler.get_cached_token()
@@ -490,7 +483,8 @@ async def reset_playlist(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Failed to reset the playlist in the database.")
         return
     await update.message.reply_text(
-        "The current playlist has been reset. You can create a new playlist with /createplaylist."
+        "The current playlist has been reset. "
+        "You can create a new playlist with /createplaylist."
     )
 
 
@@ -506,7 +500,8 @@ async def send_playlist_link(update: Update, context: CallbackContext) -> None:
 
 async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(
-        "Hiya! I'm your Spotify Skunk bot 🦨. /createplaylist so I can add spotify links as tracks in your playlist! "
+        "Hiya! I'm your Spotify Skunk bot 🦨. /createplaylist "
+        "to add songs to your playlist!"
     )
 
 
