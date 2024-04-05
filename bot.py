@@ -104,6 +104,10 @@ def handle_spotify_auth(event):
 def save_current_state(chat_id, state_key: BotState):
     # Saves the current bot state for a given chat_id in DynamoDB.
     try:
+        user_id = get_user_id_from_chat_id(chat_id)
+        if user_id is None:
+            user_id = get_user_id_from_channel_credentials(chat_id)
+
         if state_key is BotState.NO_STATE:
             response = bot_table.update_item(
                 Key={"chat_id": str(chat_id)},
@@ -113,8 +117,11 @@ def save_current_state(chat_id, state_key: BotState):
         else:
             response = bot_table.update_item(
                 Key={"chat_id": str(chat_id)},
-                UpdateExpression="SET current_state = :state",
-                ExpressionAttributeValues={":state": state_key.value},
+                UpdateExpression="SET current_state = :state, user_id = :uid",
+                ExpressionAttributeValues={
+                    ":state": state_key.value,
+                    ":uid": user_id,
+                },
                 ReturnValues="UPDATED_NEW",
             )
         logging.info(f"Updated state in DynamoDB: {response}")
@@ -138,7 +145,13 @@ def get_current_state(chat_id):
 
 def save_playlist_to_dynamodb(chat_id, playlist_id):
     try:
-        bot_table.put_item(Item={"chat_id": str(chat_id), "playlist_id": playlist_id})
+        bot_table.put_item(
+            Item={
+                "chat_id": str(chat_id),
+                "playlist_id": playlist_id,
+                "user_id": get_user_id_from_chat_id(chat_id),
+            }
+        )
     except Exception as e:
         logging.error(f"Error saving to DynamoDB: {e}")
 
@@ -165,6 +178,23 @@ def get_user_id_from_chat_id(chat_id):
             return None
     except Exception as e:
         logging.error(
+            f"Error retrieving user ID from DynamoDB for chat_id: {chat_id}, error: {e}"
+        )
+        return None
+
+
+def get_user_id_from_channel_credentials(chat_id):
+    credentials_table = dynamodb.Table("ChannelCredentials")
+
+    try:
+        response = credentials_table.get_item(Key={"chat_id": str(chat_id)})
+        if "Item" in response and "user_id" in response["Item"]:
+            return response["Item"]["user_id"]
+        else:
+            print(f"No user_id found for chat_id: {chat_id}")
+            return None
+    except Exception as e:
+        print(
             f"Error retrieving user ID from DynamoDB for chat_id: {chat_id}, error: {e}"
         )
         return None
@@ -307,25 +337,23 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
         except Exception as e:
             logging.exception(f"Error uploading playlist image: {e}")
             await update.message.reply_text(f"An error occurred: {e}")
-    else:
-        await update.message.reply_text(
-            "Looks like you are trying to set a image for a nonexistent playlist."
-        )
 
 
 async def handle_playlist_name(update: Update, context: CallbackContext) -> None:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
-    user_id_table = get_user_id_from_chat_id(chat_id)
-    if user_id_table != str(user_id):
-        await update.message.reply_text(
-            "You are not authorized for this playlist process."
-        )
-        return
+    user_id_bot_table = get_user_id_from_chat_id(chat_id)
+    user_id_credentials_table = get_user_id_from_channel_credentials(chat_id)
+
     current_state = get_current_state(chat_id)
     sp_oauth = get_sp_oauth(chat_id, user_id)
 
     if current_state == BotState.CHANGING_PLAYLIST_NAME:
+        if user_id_bot_table != str(user_id):
+            await update.message.reply_text(
+                "You are not authorized for this playlist process."
+            )
+            return
         playlist_id = get_playlist_from_dynamodb(chat_id)
         if playlist_id:
             new_name = update.message.text.strip()
@@ -341,9 +369,12 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
                 "Make sure you have a playlist created before changing the name."
             )
     elif current_state == BotState.CREATING_PLAYLIST:
-        await update.message.reply_text(
-            f"create playlist state exists: {current_state}"
-        )
+        if str(user_id) != user_id_credentials_table:
+            await update.message.reply_text(
+                "You are not authorized for this playlist process."
+            )
+            return
+
         playlist_name = update.message.text.strip()
         try:
             playlist_id = create_spotify_playlist(playlist_name, sp_oauth)
