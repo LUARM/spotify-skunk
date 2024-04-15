@@ -5,7 +5,6 @@ import os
 import spotipy
 import logging
 import re
-import traceback
 import json
 from enum import Enum
 from telegram import Update
@@ -29,8 +28,6 @@ logger = logging.getLogger()
 
 # Constants and configurations
 TOKEN = os.getenv("TELERGRAM_BOT_TOKEN")
-application = Application.builder().token(TOKEN).build()
-# Spotify
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
@@ -48,21 +45,6 @@ class BotState(Enum):
     CREATING_PLAYLIST = "creating_playlist"
     CHANGING_PLAYLIST_IMAGE = "changing_playlist_image"
     NO_STATE = None
-
-
-def lambda_handler(event, context):
-    logger.info(f"Event body type: {type(event)}")
-    logger.info(f"Event body content: {event}")
-    if event.get("body"):
-        # I'm a telegram bot post webhook served via the API GAteway.
-        return asyncio.get_event_loop().run_until_complete(main(event, context))
-    elif event.get("rawPath") == "/spotifyauth":
-        # This is served by the Lambda Function URL.
-        # Spotify API refers to this as the redirect URI and it is also the path
-        # you've specified in your Spotify Developer Dashboard.
-        return handle_spotify_auth(event)
-    else:
-        return {"statusCode": 404, "body": "no handler for this request"}
 
 
 def load_html_file(file_name):
@@ -551,8 +533,13 @@ async def unlink_credentials(update: Update, context: CallbackContext) -> None:
         )
 
 
-async def main(event, context):
-    # Define and add handlers
+def build_application():
+    application = Application.builder().token(TOKEN).build()
+    register_handlers(application)
+    return application
+
+
+def register_handlers(application):
     handlers = [
         CommandHandler("start", start),
         CommandHandler("help", help_command),
@@ -572,23 +559,47 @@ async def main(event, context):
     for handler in handlers:
         application.add_handler(handler)
 
-    # Convert the incoming event to a Telegram Update object
-    if isinstance(event["body"], str):
-        body = json.loads(event["body"])
-    else:
-        body = event["body"]
 
-    try:
-        await application.initialize()
-        await application.process_update(Update.de_json(body, application.bot))
-        return {"statusCode": 200, "body": json.dumps("Success")}
-    except Exception:
-        logger.exception("Error processing update")
-        return {
-            "statusCode": 500,
-            "body": f"Error processing update: {traceback.format_exc()}",
-        }
+# async def main(event, context):
+# Define and add handlers
+# handlers = [
+#     CommandHandler("start", start),
+#     CommandHandler("help", help_command),
+#     CommandHandler("createplaylist", create_playlist),
+#     CommandHandler("resetplaylist", reset_playlist),
+#     CommandHandler("changeplaylistname", change_playlist_name),
+#     CommandHandler("changeplaylistimage", change_playlist_image),
+#     CommandHandler("playlistlink", send_playlist_link),
+#     CommandHandler("unlink", unlink_credentials),
+#     MessageHandler(
+#         filters.TEXT & filters.Regex(spotify_link_pattern), handle_spotify_links
+#     ),
+#     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_playlist_name),
+#     MessageHandler(filters.PHOTO, handle_playlist_image),
+# ]
+
+# for handler in handlers:
+#     application.add_handler(handler)
+
+# Convert the incoming event to a Telegram Update object
+
+# will be in lambda
+# if isinstance(event["body"], str):
+#     body = json.loads(event["body"])
+# else:
+#     body = event["body"]
+
+# try:
+#     await application.initialize()
+#     await application.process_update(Update.de_json(body, application.bot))
+#     return {"statusCode": 200, "body": json.dumps("Success")}
+# except Exception:
+#     logger.exception("Error processing update")
+#     return {
+#         "statusCode": 500,
+#         "body": f"Error processing update: {traceback.format_exc()}",
+#     }
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
