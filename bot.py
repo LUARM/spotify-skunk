@@ -19,7 +19,7 @@ from spotipy.oauth2 import SpotifyOAuth, CacheHandler
 from spotipy.exceptions import SpotifyException
 import urllib.parse
 
-# Load environment variables and configure logging
+
 if logging.getLogger().hasHandlers():
     logging.getLogger().setLevel(logging.INFO)
 else:
@@ -27,15 +27,15 @@ else:
 logger = logging.getLogger()
 
 # Constants and configurations
-TOKEN = os.getenv("TELERGRAM_BOT_TOKEN")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 spotify_link_pattern = r"https://open\.spotify\.com/track/([a-zA-Z0-9]+)"
 # Dynamodb
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-bot_table = dynamodb.Table("SpotifySkunk")
-credentials_table = dynamodb.Table("ChannelCredentials")
+
+bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
+credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
 
 
 # Enums for bot states
@@ -52,32 +52,21 @@ def load_html_file(file_name):
         return file.read()
 
 
-def handle_spotify_auth(event):
-    state_encoded = event["queryStringParameters"].get("state")
-    code = event["queryStringParameters"].get("code")
-
-    if not state_encoded or not code:
-        return {"statusCode": 400, "body": "Missing required parameters"}
-    # Decoding the state
-    state_decoded = urllib.parse.unquote(state_encoded)
+def handle_spotify_auth(state, code):
+    state_decoded = urllib.parse.unquote(state)
     state_info = json.loads(state_decoded)
     chat_id = state_info.get("chat_id")
     user_id = state_info.get("user_id")
 
     sp_oauth = get_sp_oauth(chat_id, user_id)
     token_info = sp_oauth.get_access_token(code)
-    html_content = load_html_file("index.html")
+
     if token_info:
         logger.info(f"Spotify access token successfully retrieved: {token_info}")
     else:
         logger.error("Failed to retrieve Spotify access token")
     # For logging:
     # return {"statusCode": 200, "body": json.dumps(event, indent=2)}
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "text/html"},
-        "body": html_content,
-    }
 
 
 # -----------------------------------------------
@@ -156,7 +145,9 @@ def get_user_id_from_chat_id(chat_id):
         if "Item" in response and "user_id" in response["Item"]:
             return response["Item"]["user_id"]
         else:
-            logging.info(f"No user_id found for chat_id: {chat_id}")
+            logging.info(
+                f"get_user_id_from_chat_id: No user_id found for chat_id: {chat_id}: {response}"
+            )
             return None
     except Exception as e:
         logging.error(
@@ -166,14 +157,14 @@ def get_user_id_from_chat_id(chat_id):
 
 
 def get_user_id_from_channel_credentials(chat_id):
-    credentials_table = dynamodb.Table("ChannelCredentials")
-
     try:
         response = credentials_table.get_item(Key={"chat_id": str(chat_id)})
         if "Item" in response and "user_id" in response["Item"]:
             return response["Item"]["user_id"]
         else:
-            print(f"No user_id found for chat_id: {chat_id}")
+            print(
+                f"get_user_id_from_channel_credentials: No user_id found for chat_id: {chat_id}: {response}"
+            )
             return None
     except Exception as e:
         print(
@@ -200,7 +191,7 @@ class DynamoCredentialsCache(CacheHandler):
             return None
         except Exception as e:
             logging.error(f"Error retrieving from DynamoDB: {e}")
-            return None
+            raise
 
     def save_token_to_cache(self, token_info):
         try:
@@ -218,6 +209,7 @@ class DynamoCredentialsCache(CacheHandler):
             )
         except Exception as e:
             logging.error(f"Error saving to DynamoDB: {e}")
+            raise
 
 
 # -----------------------------------------------
@@ -533,8 +525,9 @@ async def unlink_credentials(update: Update, context: CallbackContext) -> None:
         )
 
 
-def build_application():
-    application = Application.builder().token(TOKEN).build()
+def build_application(token):
+    logger.error(f"token: {token}")
+    application = Application.builder().token(token).build()
     register_handlers(application)
     return application
 
@@ -558,48 +551,3 @@ def register_handlers(application):
 
     for handler in handlers:
         application.add_handler(handler)
-
-
-# async def main(event, context):
-# Define and add handlers
-# handlers = [
-#     CommandHandler("start", start),
-#     CommandHandler("help", help_command),
-#     CommandHandler("createplaylist", create_playlist),
-#     CommandHandler("resetplaylist", reset_playlist),
-#     CommandHandler("changeplaylistname", change_playlist_name),
-#     CommandHandler("changeplaylistimage", change_playlist_image),
-#     CommandHandler("playlistlink", send_playlist_link),
-#     CommandHandler("unlink", unlink_credentials),
-#     MessageHandler(
-#         filters.TEXT & filters.Regex(spotify_link_pattern), handle_spotify_links
-#     ),
-#     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_playlist_name),
-#     MessageHandler(filters.PHOTO, handle_playlist_image),
-# ]
-
-# for handler in handlers:
-#     application.add_handler(handler)
-
-# Convert the incoming event to a Telegram Update object
-
-# will be in lambda
-# if isinstance(event["body"], str):
-#     body = json.loads(event["body"])
-# else:
-#     body = event["body"]
-
-# try:
-#     await application.initialize()
-#     await application.process_update(Update.de_json(body, application.bot))
-#     return {"statusCode": 200, "body": json.dumps("Success")}
-# except Exception:
-#     logger.exception("Error processing update")
-#     return {
-#         "statusCode": 500,
-#         "body": f"Error processing update: {traceback.format_exc()}",
-#     }
-
-
-# if __name__ == "__main__":
-#     main()
