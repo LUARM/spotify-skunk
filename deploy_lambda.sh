@@ -6,7 +6,7 @@ set -e -x
 
 # Load environment variables from .env file
 if [ -f .env ]; then
-   export $(cat .env | xargs)
+    export $(grep -v '^#' .env | xargs)
 fi
 
 # Define the name of the zip file

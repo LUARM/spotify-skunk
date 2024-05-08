@@ -372,6 +372,7 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     message_text = update.message.text
+    message_id = update.message.message_id
     match = re.search(spotify_link_pattern, message_text)
     current_state = get_current_state(chat_id)
     if current_state == BotState.CREATING_PLAYLIST:
@@ -385,8 +386,7 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
         track_id = match.group(1)
         sp_oauth = get_sp_oauth(chat_id, user_id)
         if add_track_to_spotify_playlist(playlist_id, track_id, sp_oauth):
-            await update.message.reply_text("Added Spotify track to your playlist!")
-            await update.message.reply_text("🦨 ❤️ 🎶")
+            await update.message.set_reaction("👍" )
         else:
             await update.message.reply_text(
                 "Failed to add the track. Make sure you have the correct permissions "
