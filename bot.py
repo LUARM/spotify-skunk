@@ -7,13 +7,14 @@ import logging
 import re
 import json
 from enum import Enum
-from telegram import Update
+from telegram import Update, LinkPreviewOptions
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     filters,
     CallbackContext,
+    Defaults,
 )
 from spotipy.oauth2 import SpotifyOAuth, CacheHandler
 from spotipy.exceptions import SpotifyException
@@ -27,6 +28,11 @@ else:
 logger = logging.getLogger()
 
 # Constants and configurations
+
+defaults = Defaults(
+    link_preview_options=LinkPreviewOptions(show_above_text=False, is_disabled=True),
+    disable_notification=True,
+)
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
@@ -301,7 +307,11 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
 
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
             await update.message.reply_text(
-                f"Here's your playlist link: {playlist_url}"
+                f"Here's your playlist link: {playlist_url}",
+                disable_web_page_preview=False,
+                link_preview_options=LinkPreviewOptions(
+                    show_above_text=True, is_disabled=False
+                ),
             )
 
             save_current_state(chat_id, BotState.NO_STATE)
@@ -372,7 +382,6 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     message_text = update.message.text
-    message_id = update.message.message_id
     match = re.search(spotify_link_pattern, message_text)
     current_state = get_current_state(chat_id)
     if current_state == BotState.CREATING_PLAYLIST:
@@ -386,7 +395,7 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
         track_id = match.group(1)
         sp_oauth = get_sp_oauth(chat_id, user_id)
         if add_track_to_spotify_playlist(playlist_id, track_id, sp_oauth):
-            await update.message.set_reaction("👍" )
+            await update.message.set_reaction("👍")
         else:
             await update.message.reply_text(
                 "Failed to add the track. Make sure you have the correct permissions "
@@ -498,7 +507,13 @@ async def send_playlist_link(update: Update, context: CallbackContext) -> None:
     playlist_id = get_playlist_from_dynamodb(chat_id)
     if playlist_id:
         playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
-        await update.message.reply_text(f"Here's your playlist link: {playlist_url}")
+        await update.message.reply_text(
+            f"Here's your playlist link: {playlist_url}",
+            disable_web_page_preview=False,
+            link_preview_options=LinkPreviewOptions(
+                show_above_text=True, is_disabled=False
+            ),
+        )
     else:
         await update.message.reply_text("No playlist found for this chat.")
 
@@ -527,7 +542,7 @@ async def unlink_credentials(update: Update, context: CallbackContext) -> None:
 
 def build_application(token):
     logger.error(f"token: {token}")
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).defaults(defaults).build()
     register_handlers(application)
     return application
 
