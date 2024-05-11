@@ -1,6 +1,5 @@
 import asyncio
 
-import telegram
 from bot import handle_spotify_auth, load_html_file
 import logging
 from bot import build_application

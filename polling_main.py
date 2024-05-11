@@ -4,14 +4,7 @@ from flask import Flask, request
 from bot import build_application, load_html_file
 from bot import handle_spotify_auth
 import logging
-import sys
-import time
 from flask import Response
-import telegram
-
-
-import json
-import urllib.parse
 
 webserver = Flask(__name__)
 
