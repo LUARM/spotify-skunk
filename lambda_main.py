@@ -1,4 +1,6 @@
 import asyncio
+
+import telegram
 from bot import handle_spotify_auth, load_html_file
 import logging
 from bot import build_application
@@ -19,24 +21,24 @@ def lambda_handler(event, context):
     logger.info(f"Event body content: {event}")
     if event.get("body"):
         # I'm a telegram bot post webhook served via the API GAteway.
-        return asyncio.get_event_loop().run_until_complete(main(event, context))
+        return asyncio.run(main(event, context))
     elif event.get("rawPath") == "/spotifyauth":
         # This is served by the Lambda Function URL.
         # Spotify API refers to this as the redirect URI and it is also the path
         # you've specified in your Spotify Developer Dashboard.
-        return handle_spotify_auth(event)
+        return handle_spotify_event(event)
     else:
         return {"statusCode": 404, "body": "no handler for this request"}
 
 
 def handle_spotify_event(event):
-    html_content = load_html_file("index.html")
     state_encoded = event["queryStringParameters"].get("state")
     code = event["queryStringParameters"].get("code")
 
     if not state_encoded or not code:
         return {"statusCode": 400, "body": "Missing required parameters"}
     handle_spotify_auth(state_encoded, code)
+    html_content = load_html_file("index.html")
     return {
         "statusCode": 200,
         "headers": {"Content-Type": "text/html"},
@@ -64,6 +66,9 @@ async def main(event, context):
             "statusCode": 500,
             "body": f"Error processing update: {traceback.format_exc()}",
         }
+    finally:
+        await application.shutdown()
+        logger.info("application.shutdown")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ import logging
 import sys
 import time
 from flask import Response
+import telegram
+
 
 import json
 import urllib.parse
@@ -30,7 +32,6 @@ def callback():
     state = request.args.get("state")
     logger.info(f"honey we got the code: {code}, and the state: {state}")
     handle_spotify_auth(state, code)
-
     return Response(html_content, status=200, content_type="text/html")
 
 
@@ -45,9 +46,8 @@ if __name__ == "__main__":
     # Start the Flask app in a separate thread
     threading.Thread(target=run_flask_app, daemon=True).start()
 
-    # Start polling in a separate thread
-    threading.Thread(target=application.run_polling(), daemon=True).start()
-
+    # Start polling
+    application.run_polling()
     # Main thread does something totally different.
     # i = 0
     # while True:

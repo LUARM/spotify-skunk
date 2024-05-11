@@ -6,6 +6,7 @@ import spotipy
 import logging
 import re
 import json
+import telegram
 from enum import Enum
 from telegram import Update, LinkPreviewOptions
 from telegram.ext import (
@@ -68,7 +69,12 @@ def handle_spotify_auth(state, code):
     token_info = sp_oauth.get_access_token(code)
 
     if token_info:
+        TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+        bot = telegram.Bot(TOKEN)
         logger.info(f"Spotify access token successfully retrieved: {token_info}")
+        asyncio.run(
+            bot.send_message(text="Enter a name for your new playlist", chat_id=chat_id)
+        )
     else:
         logger.error("Failed to retrieve Spotify access token")
     # For logging:
@@ -335,7 +341,7 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
     if current_state == BotState.CHANGING_PLAYLIST_NAME:
         if user_id_bot_table != str(user_id):
             await update.message.reply_text(
-                "You are not authorized for this playlist process."
+                "Please click on authorize link before entering playlist name."
             )
             return
         playlist_id = get_playlist_from_dynamodb(chat_id)
@@ -462,9 +468,8 @@ async def create_playlist(update: Update, context: CallbackContext) -> bool:
     token_info = sp_oauth.cache_handler.get_cached_token()
     if sp_oauth.validate_token(token_info) is None:
         auth_url = sp_oauth.get_authorize_url(state=state_url_safe)
-        await update.message.reply_text(f"click this to authorize the bot:{auth_url}")
         await update.message.reply_text(
-            "Enter a name for your new playlist after authorizing:"
+            f"click this to authorize the bot:{auth_url}", protect_content=True
         )
     else:
         await update.message.reply_text("Please enter a name for your new playlist:")
@@ -541,13 +546,13 @@ async def unlink_credentials(update: Update, context: CallbackContext) -> None:
 
 
 def build_application(token):
-    logger.error(f"token: {token}")
+    logger.info(f"token: {token}")
     application = Application.builder().token(token).defaults(defaults).build()
     register_handlers(application)
     return application
 
 
-def register_handlers(application):
+def register_handlers(application: Application):
     handlers = [
         CommandHandler("start", start),
         CommandHandler("help", help_command),
