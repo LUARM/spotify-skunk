@@ -16,10 +16,13 @@ from telegram.ext import (
     filters,
     CallbackContext,
     Defaults,
+    ContextTypes,
 )
 from spotipy.oauth2 import SpotifyOAuth, CacheHandler
 from spotipy.exceptions import SpotifyException
 import urllib.parse
+from custom_callback_contex import CustomCallbackContext
+from storage.dynamodb_init import bot_table, credentials_table
 
 
 if logging.getLogger().hasHandlers():
@@ -39,10 +42,10 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 spotify_link_pattern = r"https://open\.spotify\.com/track/([a-zA-Z0-9]+)"
 # Dynamodb
-dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+# dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 
-bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
-credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
+# bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
+# credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
 
 
 # Enums for bot states
@@ -81,123 +84,23 @@ def handle_spotify_auth(state, code):
     # return {"statusCode": 200, "body": json.dumps(event, indent=2)}
 
 
-# -----------------------------------------------
-# DynamoDB Utility Functions
-# -----------------------------------------------
-def save_current_state(chat_id, state_key: BotState):
-    # Saves the current bot state for a given chat_id in DynamoDB.
-    try:
-        user_id = get_user_id_from_chat_id(chat_id)
-        if user_id is None:
-            user_id = get_user_id_from_channel_credentials(chat_id)
-
-        if state_key is BotState.NO_STATE:
-            response = bot_table.update_item(
-                Key={"chat_id": str(chat_id)},
-                UpdateExpression="REMOVE current_state",
-                ReturnValues="UPDATED_NEW",
-            )
-        else:
-            response = bot_table.update_item(
-                Key={"chat_id": str(chat_id)},
-                UpdateExpression="SET current_state = :state, user_id = :uid",
-                ExpressionAttributeValues={
-                    ":state": state_key.value,
-                    ":uid": user_id,
-                },
-                ReturnValues="UPDATED_NEW",
-            )
-        logging.info(f"Updated state in DynamoDB: {response}")
-        return response
-    except Exception as e:
-        logging.error(f"Error saving current state to DynamoDB: {e}")
-
-
-def get_current_state(chat_id):
-    # Retrieves the current bot state for a given chat_id from DynamoDB.
-    try:
-        response = bot_table.get_item(Key={"chat_id": str(chat_id)})
-        if "Item" in response and "current_state" in response["Item"]:
-            state_value = response["Item"]["current_state"]
-            return BotState(state_value)
-        return None
-    except Exception as e:
-        logging.error(f"Error retrieving current state from DynamoDB: {e}")
-        return None
-
-
-def save_playlist_to_dynamodb(chat_id, playlist_id):
-    try:
-        bot_table.put_item(
-            Item={
-                "chat_id": str(chat_id),
-                "playlist_id": playlist_id,
-                "user_id": get_user_id_from_chat_id(chat_id),
-            }
-        )
-    except Exception as e:
-        logging.error(f"Error saving to DynamoDB: {e}")
-
-
-def get_playlist_from_dynamodb(chat_id):
-    try:
-        response = bot_table.get_item(Key={"chat_id": str(chat_id)})
-        if "Item" in response:
-            playlist_id = response["Item"].get("playlist_id")
-            return playlist_id
-        return None
-    except Exception as e:
-        logging.error(f"Error retrieving from DynamoDB: {e}")
-        return None
-
-
-def get_user_id_from_chat_id(chat_id):
-    try:
-        response = bot_table.get_item(Key={"chat_id": str(chat_id)})
-        if "Item" in response and "user_id" in response["Item"]:
-            return response["Item"]["user_id"]
-        else:
-            logging.info(
-                f"get_user_id_from_chat_id: No user_id found for chat_id: {chat_id}: {response}"
-            )
-            return None
-    except Exception as e:
-        logging.error(
-            f"Error retrieving user ID from DynamoDB for chat_id: {chat_id}, error: {e}"
-        )
-        return None
-
-
-def get_user_id_from_channel_credentials(chat_id):
-    try:
-        response = credentials_table.get_item(Key={"chat_id": str(chat_id)})
-        if "Item" in response and "user_id" in response["Item"]:
-            return response["Item"]["user_id"]
-        else:
-            print(
-                f"get_user_id_from_channel_credentials: No user_id found for chat_id: {chat_id}: {response}"
-            )
-            return None
-    except Exception as e:
-        print(
-            f"Error retrieving user ID from DynamoDB for chat_id: {chat_id}, error: {e}"
-        )
-        return None
-
-
 class DynamoCredentialsCache(CacheHandler):
     """
     A cache handler that stores OAuth credentials in a Dynamo bot_table called
     'ChannelCredentials' that has a primary key of chat_id.
     """
 
-    def __init__(self, chat_id, user_id):
+    def __init__(self, chat_id, user_id, credentials_table, bot_table):
         self.chat_id = chat_id
         self.user_id = user_id
+        self.credentials_table = credentials_table
+        self.bot_table = bot_table
 
     def get_cached_token(self):
         try:
-            response = credentials_table.get_item(Key={"chat_id": str(self.chat_id)})
+            response = self.credentials_table.get_item(
+                Key={"chat_id": str(self.chat_id)}
+            )
             if "Item" in response:
                 return response["Item"]
             return None
@@ -207,14 +110,14 @@ class DynamoCredentialsCache(CacheHandler):
 
     def save_token_to_cache(self, token_info):
         try:
-            credentials_table.put_item(
+            self.credentials_table.put_item(
                 Item={
                     "chat_id": str(self.chat_id),
                     "user_id": self.user_id,
                     **token_info,
                 }
             )
-            bot_table.update_item(
+            self.bot_table.update_item(
                 Key={"chat_id": str(self.chat_id)},
                 UpdateExpression="SET user_id = :uid",
                 ExpressionAttributeValues={":uid": str(self.user_id)},
@@ -232,7 +135,9 @@ def get_sp_oauth(chat_id, user_id):
         SPOTIFY_CLIENT_ID,
         SPOTIFY_CLIENT_SECRET,
         SPOTIFY_REDIRECT_URI,
-        cache_handler=DynamoCredentialsCache(chat_id, user_id),
+        cache_handler=DynamoCredentialsCache(
+            chat_id, user_id, credentials_table, bot_table
+        ),
         scope="playlist-modify-public ugc-image-upload",
     )
 
@@ -272,23 +177,23 @@ def create_spotify_playlist(playlist_name, sp_oauth):
 # -----------------------------------------------
 # Telegram Message Handlers
 # -----------------------------------------------
-async def handle_playlist_image(update: Update, context: CallbackContext) -> None:
+async def handle_playlist_image(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
-    user_id_table = get_user_id_from_chat_id(chat_id)
+    user_id_table = context.storage.get_user_id_from_chat_id(chat_id)
     if user_id_table != str(user_id):
         await update.message.reply_text(
             "You are not authorized for this playlist process."
         )
         return
-    current_state = get_current_state(chat_id)
+    current_state = context.storage.get_current_state(chat_id)
     if (
         current_state == BotState.AWAITING_PLAYLIST_IMAGE
         or current_state == BotState.CHANGING_PLAYLIST_IMAGE
     ):
         photo = update.message.photo[-1]
         await update.message.reply_text("Processing your image, please wait...")
-        playlist_id = get_playlist_from_dynamodb(chat_id)
+        playlist_id = context.storage.get_playlist_from_dynamodb(chat_id)
         if not playlist_id:
             await update.message.reply_text("No playlist found for this chat.")
             return
@@ -320,7 +225,7 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
                 ),
             )
 
-            save_current_state(chat_id, BotState.NO_STATE)
+            context.storage.save_current_state(chat_id, BotState.NO_STATE)
         except asyncio.TimeoutError:
             logging.exception("Error Timeout: TimeoutError")
             await update.message.reply_text("Image upload timed out. Please try again.")
@@ -329,13 +234,15 @@ async def handle_playlist_image(update: Update, context: CallbackContext) -> Non
             await update.message.reply_text(f"An error occurred: {e}")
 
 
-async def handle_playlist_name(update: Update, context: CallbackContext) -> None:
+async def handle_playlist_name(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
-    user_id_bot_table = get_user_id_from_chat_id(chat_id)
-    user_id_credentials_table = get_user_id_from_channel_credentials(chat_id)
+    user_id_bot_table = context.storage.get_user_id_from_chat_id(chat_id)
+    user_id_credentials_table = context.storage.get_user_id_from_channel_credentials(
+        chat_id
+    )
 
-    current_state = get_current_state(chat_id)
+    current_state = context.storage.get_current_state(chat_id)
     sp_oauth = get_sp_oauth(chat_id, user_id)
 
     if current_state == BotState.CHANGING_PLAYLIST_NAME:
@@ -344,7 +251,7 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
                 "Please click on authorize link before entering playlist name."
             )
             return
-        playlist_id = get_playlist_from_dynamodb(chat_id)
+        playlist_id = context.storage.get_playlist_from_dynamodb(chat_id)
         if playlist_id:
             new_name = update.message.text.strip()
             if change_spotify_playlist_name(playlist_id, new_name, sp_oauth):
@@ -353,7 +260,7 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
                 await update.message.reply_text(
                     "Failed to change the playlist name. Please try again later."
                 )
-            save_current_state(chat_id, BotState.NO_STATE)
+            context.storage.save_current_state(chat_id, BotState.NO_STATE)
         else:
             await update.message.reply_text(
                 "Make sure you have a playlist created before changing the name."
@@ -368,8 +275,10 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
         playlist_name = update.message.text.strip()
         try:
             playlist_id = create_spotify_playlist(playlist_name, sp_oauth)
-            save_playlist_to_dynamodb(chat_id, playlist_id)
-            save_current_state(chat_id, BotState.AWAITING_PLAYLIST_IMAGE)
+            context.storage.save_playlist_to_dynamodb(chat_id, playlist_id)
+            context.storage.save_current_state(
+                chat_id, BotState.AWAITING_PLAYLIST_IMAGE
+            )
             await update.message.reply_text(
                 f"Created new playlist: {playlist_name}. "
                 "Now please send me a cool image to set as your playlist cover 😎."
@@ -384,19 +293,19 @@ async def handle_playlist_name(update: Update, context: CallbackContext) -> None
         return
 
 
-async def handle_spotify_links(update: Update, context: CallbackContext) -> None:
+async def handle_spotify_links(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     message_text = update.message.text
     match = re.search(spotify_link_pattern, message_text)
-    current_state = get_current_state(chat_id)
+    current_state = context.storage.get_current_state(chat_id)
     if current_state == BotState.CREATING_PLAYLIST:
         await update.message.reply_text(
             "You are in the process of creating a playlist. "
             "Please wait until it's done before sending links."
         )
         return
-    playlist_id = get_playlist_from_dynamodb(chat_id)
+    playlist_id = context.storage.get_playlist_from_dynamodb(chat_id)
     if match and playlist_id:
         track_id = match.group(1)
         sp_oauth = get_sp_oauth(chat_id, user_id)
@@ -416,31 +325,31 @@ async def handle_spotify_links(update: Update, context: CallbackContext) -> None
 # -----------------------------------------------
 # Telegram Command Handlers
 # -----------------------------------------------
-async def change_playlist_image(update: Update, context: CallbackContext) -> None:
+async def change_playlist_image(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
-    playlist_id = get_playlist_from_dynamodb(chat_id)
+    playlist_id = context.storage.get_playlist_from_dynamodb(chat_id)
     if playlist_id:
         await update.message.reply_text("Please send the new image for your playlist:")
-        save_current_state(chat_id, BotState.CHANGING_PLAYLIST_IMAGE)
+        context.storage.save_current_state(chat_id, BotState.CHANGING_PLAYLIST_IMAGE)
     else:
         await update.message.reply_text(
             "No playlist found for this chat. Create one with /createplaylist."
         )
 
 
-async def change_playlist_name(update: Update, context: CallbackContext) -> None:
+async def change_playlist_name(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
-    playlist_id = get_playlist_from_dynamodb(chat_id)
+    playlist_id = context.storage.get_playlist_from_dynamodb(chat_id)
     if playlist_id:
         await update.message.reply_text("Please enter the new name for your playlist:")
-        save_current_state(chat_id, BotState.CHANGING_PLAYLIST_NAME)
+        context.storage.save_current_state(chat_id, BotState.CHANGING_PLAYLIST_NAME)
     else:
         await update.message.reply_text(
             "No playlist found for this chat. Create one with /createplaylist."
         )
 
 
-async def create_playlist(update: Update, context: CallbackContext) -> bool:
+async def create_playlist(update: Update, context: CustomCallbackContext) -> bool:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
 
@@ -448,9 +357,9 @@ async def create_playlist(update: Update, context: CallbackContext) -> bool:
     state_encoded = json.dumps(state_info)
     state_url_safe = urllib.parse.quote(state_encoded)
 
-    playlist_id = get_playlist_from_dynamodb(chat_id)
+    playlist_id = context.storage.get_playlist_from_dynamodb(chat_id)
 
-    current_state = get_current_state(chat_id)
+    current_state = context.storage.get_current_state(chat_id)
 
     if playlist_id:
         await update.message.reply_text(
@@ -463,7 +372,7 @@ async def create_playlist(update: Update, context: CallbackContext) -> bool:
             "You are already in the process of creating a playlist."
         )
         return False
-    save_current_state(chat_id, BotState.CREATING_PLAYLIST)
+    context.storage.save_current_state(chat_id, BotState.CREATING_PLAYLIST)
     sp_oauth = get_sp_oauth(chat_id, user_id)
     token_info = sp_oauth.cache_handler.get_cached_token()
     if sp_oauth.validate_token(token_info) is None:
@@ -476,7 +385,7 @@ async def create_playlist(update: Update, context: CallbackContext) -> bool:
     return True
 
 
-async def help_command(update: Update, context: CallbackContext) -> None:
+async def help_command(update: Update, context: CustomCallbackContext) -> None:
     help_text = (
         "Here are the commands you can use:\n"
         "/start - Start interacting with the bot\n"
@@ -492,7 +401,7 @@ async def help_command(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(help_text)
 
 
-async def reset_playlist(update: Update, context: CallbackContext) -> None:
+async def reset_playlist(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
     # Delete the playlist entry from DynamoDB
     try:
@@ -507,9 +416,9 @@ async def reset_playlist(update: Update, context: CallbackContext) -> None:
     )
 
 
-async def send_playlist_link(update: Update, context: CallbackContext) -> None:
+async def send_playlist_link(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
-    playlist_id = get_playlist_from_dynamodb(chat_id)
+    playlist_id = context.storage.get_playlist_from_dynamodb(chat_id)
     if playlist_id:
         playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
         await update.message.reply_text(
@@ -523,18 +432,57 @@ async def send_playlist_link(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("No playlist found for this chat.")
 
 
-async def start(update: Update, context: CallbackContext) -> None:
+async def start(update: Update, context: CustomCallbackContext) -> None:
     await update.message.reply_text(
         "Hiya! I'm your Spotify Skunk bot 🦨. /createplaylist "
         "to add songs to your playlist!"
     )
 
 
-async def unlink_credentials(update: Update, context: CallbackContext) -> None:
+async def unlink_credentials(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
+    # Log the storage object and tables
+    # logging.info(f"Storage object: {context.storage}")
+    # logging.info(f"Credentials table: {context.storage.credentials_table}")
+    # logging.info(f"Bot table: {context.storage.bot_table}")
     try:
-        credentials_table.delete_item(Key={"chat_id": str(chat_id)})
-        bot_table.delete_item(Key={"chat_id": str(chat_id)})
+        # Check if the item exists in the credentials table
+        credentials_response = context.storage.credentials_table.get_item(
+            Key={"chat_id": str(chat_id)}
+        )
+        logging.info(f"Credentials get_item response: {credentials_response}")
+        if "Item" not in credentials_response:
+            logging.error(f"Credentials not found for chat_id {chat_id}")
+            await update.message.reply_text(
+                "Failed to unlink your Spotify credentials: credentials not found."
+            )
+            return
+
+        # Check if the item exists in the bot table
+        bot_response = context.storage.bot_table.get_item(Key={"chat_id": str(chat_id)})
+        logging.info(f"Bot get_item response: {bot_response}")
+        if "Item" not in bot_response:
+            logging.error(f"Bot data not found for chat_id {chat_id}")
+            await update.message.reply_text(
+                "Failed to unlink your Spotify credentials: bot data not found."
+            )
+            return
+
+        # Log the deletion attempt
+        logging.info(
+            f"Attempting to delete item from credentials table for chat_id {chat_id}"
+        )
+        credentials_delete_response = context.storage.credentials_table.delete_item(
+            Key={"chat_id": str(chat_id)}
+        )
+        logging.info(f"Credentials delete_item response: {credentials_delete_response}")
+
+        logging.info(f"Attempting to delete item from bot table for chat_id {chat_id}")
+        bot_delete_response = context.storage.bot_table.delete_item(
+            Key={"chat_id": str(chat_id)}
+        )
+        logging.info(f"Bot delete_item response: {bot_delete_response}")
+
         await update.message.reply_text(
             "Your Spotify credentials have been unlinked successfully."
         )
@@ -545,9 +493,21 @@ async def unlink_credentials(update: Update, context: CallbackContext) -> None:
         )
 
 
-def build_application(token):
+def build_application(token, storage):
     logger.info(f"token: {token}")
     application = Application.builder().token(token).defaults(defaults).build()
+
+    # Set the custom context for each handler
+    context_types = ContextTypes(context=CustomCallbackContext)
+    application = (
+        Application.builder()
+        .token(token)
+        .context_types(context_types)
+        .defaults(defaults)
+        .build()
+    )
+    application.bot_data["storage"] = storage
+
     register_handlers(application)
     return application
 

@@ -5,6 +5,10 @@ from bot import build_application, load_html_file
 from bot import handle_spotify_auth
 import logging
 from flask import Response
+from storage.dynamodb_storage import DynamoDBStorage
+from storage.in_memory_storage import InMemoryStorage
+from storage.dynamodb_init import bot_table, credentials_table
+import boto3
 
 webserver = Flask(__name__)
 
@@ -34,17 +38,22 @@ def run_flask_app():
 
 if __name__ == "__main__":
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    application = build_application(TOKEN)
+
+    # Initialize storage
+    dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+    # bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
+    # credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
+    dynamodb_storage = DynamoDBStorage(bot_table, credentials_table)
+    in_memory_storage = InMemoryStorage()
+
+    # Use DynamoDB storage for production, in-memory storage for testing
+    storage = dynamodb_storage
+
+    application = build_application(TOKEN, storage)
 
     # Start the Flask app in a separate thread
     threading.Thread(target=run_flask_app, daemon=True).start()
 
     # Start polling
     application.run_polling()
-    # Main thread does something totally different.
-    # i = 0
-    # while True:
-    #     time.sleep(1)
-    #     i += 1
-    #     sys.stdout.write(f"{i} {SPINNER[i % len(SPINNER)]}\r")
-    #     sys.stdout.flush()
+
