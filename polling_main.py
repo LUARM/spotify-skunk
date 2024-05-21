@@ -7,7 +7,7 @@ import logging
 from flask import Response
 from storage.dynamodb_storage import DynamoDBStorage
 from storage.in_memory_storage import InMemoryStorage
-from storage.dynamodb_init import bot_table, credentials_table
+# from storage.dynamodb_init import bot_table, credentials_table
 import boto3
 
 webserver = Flask(__name__)
@@ -40,11 +40,11 @@ if __name__ == "__main__":
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
     # Initialize storage
-    dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+    # dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
     # bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
     # credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
-    dynamodb_storage = DynamoDBStorage(bot_table, credentials_table)
-    in_memory_storage = InMemoryStorage()
+    dynamodb_storage = DynamoDBStorage()
+    # in_memory_storage = InMemoryStorage()
 
     # Use DynamoDB storage for production, in-memory storage for testing
     storage = dynamodb_storage
