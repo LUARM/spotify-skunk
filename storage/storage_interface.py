@@ -1,4 +1,13 @@
 from abc import ABC, abstractmethod
+from enum import Enum
+
+
+class BotState(Enum):
+    AWAITING_PLAYLIST_IMAGE = "awaiting_playlist_image"
+    CHANGING_PLAYLIST_NAME = "changing_playlist_name"
+    CREATING_PLAYLIST = "creating_playlist"
+    CHANGING_PLAYLIST_IMAGE = "changing_playlist_image"
+    NO_STATE = None
 
 
 class Storage(ABC):

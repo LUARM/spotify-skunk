@@ -6,9 +6,6 @@ from bot import handle_spotify_auth
 import logging
 from flask import Response
 from storage.dynamodb_storage import DynamoDBStorage
-from storage.in_memory_storage import InMemoryStorage
-# from storage.dynamodb_init import bot_table, credentials_table
-import boto3
 
 webserver = Flask(__name__)
 
@@ -28,7 +25,7 @@ def callback():
     code = request.args.get("code")
     state = request.args.get("state")
     logger.info(f"honey we got the code: {code}, and the state: {state}")
-    handle_spotify_auth(state, code)
+    handle_spotify_auth(state, code, storage)
     return Response(html_content, status=200, content_type="text/html")
 
 
@@ -40,13 +37,10 @@ if __name__ == "__main__":
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
     # Initialize storage
-    # dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-    # bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
-    # credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
     dynamodb_storage = DynamoDBStorage()
     # in_memory_storage = InMemoryStorage()
 
-    # Use DynamoDB storage for production, in-memory storage for testing
+    # TODO: Use DynamoDB storage for production, in-memory storage for testing
     storage = dynamodb_storage
 
     application = build_application(TOKEN, storage)
@@ -56,4 +50,3 @@ if __name__ == "__main__":
 
     # Start polling
     application.run_polling()
-

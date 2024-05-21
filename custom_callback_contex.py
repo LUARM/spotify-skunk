@@ -9,10 +9,3 @@ class CustomCallbackContext(BaseCallbackContext):
 
     def storage(self) -> DynamoDBStorage:
         return self.bot_data["storage"]
-
-    # @classmethod
-    # def from_update(cls, update, application):
-    #     """Override from_update to set storage."""
-    #     context = super().from_update(update, application)
-    #     context.storage = application.bot_data.get("storage")
-    #     return context

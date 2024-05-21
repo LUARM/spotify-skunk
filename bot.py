@@ -1,20 +1,17 @@
 import asyncio
 import base64
-import boto3
 import os
 import spotipy
 import logging
 import re
 import json
 import telegram
-from enum import Enum
 from telegram import Update, LinkPreviewOptions
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     filters,
-    CallbackContext,
     Defaults,
     ContextTypes,
 )
@@ -22,10 +19,7 @@ from spotipy.oauth2 import SpotifyOAuth, CacheHandler
 from spotipy.exceptions import SpotifyException
 import urllib.parse
 from custom_callback_contex import CustomCallbackContext
-from storage.dynamodb_storage import DynamoDBStorage
-
-# from storage.dynamodb_init import bot_table, credentials_table
-
+from storage.storage_interface import BotState
 
 if logging.getLogger().hasHandlers():
     logging.getLogger().setLevel(logging.INFO)
@@ -34,7 +28,6 @@ else:
 logger = logging.getLogger()
 
 # Constants and configurations
-
 defaults = Defaults(
     link_preview_options=LinkPreviewOptions(show_above_text=False, is_disabled=True),
     disable_notification=True,
@@ -43,20 +36,6 @@ SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 spotify_link_pattern = r"https://open\.spotify\.com/track/([a-zA-Z0-9]+)"
-# Dynamodb
-# dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-
-# bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
-# credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
-
-
-# Enums for bot states
-class BotState(Enum):
-    AWAITING_PLAYLIST_IMAGE = "awaiting_playlist_image"
-    CHANGING_PLAYLIST_NAME = "changing_playlist_name"
-    CREATING_PLAYLIST = "creating_playlist"
-    CHANGING_PLAYLIST_IMAGE = "changing_playlist_image"
-    NO_STATE = None
 
 
 def load_html_file(file_name):
@@ -64,13 +43,13 @@ def load_html_file(file_name):
         return file.read()
 
 
-def handle_spotify_auth(state, code):
+def handle_spotify_auth(state, code, storage):
     state_decoded = urllib.parse.unquote(state)
     state_info = json.loads(state_decoded)
     chat_id = state_info.get("chat_id")
     user_id = state_info.get("user_id")
 
-    sp_oauth = get_sp_oauth(chat_id, user_id)
+    sp_oauth = get_sp_oauth(chat_id, user_id, storage)
     token_info = sp_oauth.get_access_token(code)
 
     if token_info:
@@ -132,13 +111,13 @@ class DynamoCredentialsCache(CacheHandler):
 # -----------------------------------------------
 # Spotify Utility Functions
 # -----------------------------------------------
-def get_sp_oauth(chat_id, user_id):
+def get_sp_oauth(chat_id, user_id, storage):
     # TODO: Pass Storage Param
     return SpotifyOAuth(
         SPOTIFY_CLIENT_ID,
         SPOTIFY_CLIENT_SECRET,
         SPOTIFY_REDIRECT_URI,
-        cache_handler=DynamoCredentialsCache(chat_id, user_id, DynamoDBStorage()),
+        cache_handler=DynamoCredentialsCache(chat_id, user_id, storage),
         scope="playlist-modify-public ugc-image-upload",
     )
 
@@ -210,7 +189,7 @@ async def handle_playlist_image(update: Update, context: CustomCallbackContext) 
                 return
 
             async def upload_image():
-                sp_oauth = get_sp_oauth(chat_id, user_id)
+                sp_oauth = get_sp_oauth(chat_id, user_id, context.storage())
                 sp = spotipy.Spotify(auth_manager=sp_oauth)
                 sp.playlist_upload_cover_image(playlist_id, base64_image)
 
@@ -245,7 +224,7 @@ async def handle_playlist_name(update: Update, context: CustomCallbackContext) -
 
     current_state = context.storage().get_current_state(chat_id)
     logging.info(f"the state here-pre is: {current_state}, {type(current_state)}")
-    sp_oauth = get_sp_oauth(chat_id, user_id)
+    sp_oauth = get_sp_oauth(chat_id, user_id, context.storage())
     logging.info(f"here is sp oauth: {sp_oauth}")
 
     if current_state == BotState.CHANGING_PLAYLIST_NAME:
@@ -312,7 +291,7 @@ async def handle_spotify_links(update: Update, context: CustomCallbackContext) -
     playlist_id = context.storage().get_playlist_from_dynamodb(chat_id)
     if match and playlist_id:
         track_id = match.group(1)
-        sp_oauth = get_sp_oauth(chat_id, user_id)
+        sp_oauth = get_sp_oauth(chat_id, user_id, context.storage())
         if add_track_to_spotify_playlist(playlist_id, track_id, sp_oauth):
             await update.message.set_reaction("👍")
         else:
@@ -377,7 +356,7 @@ async def create_playlist(update: Update, context: CustomCallbackContext) -> boo
         )
         return False
     context.storage().save_current_state(chat_id, BotState.CREATING_PLAYLIST)
-    sp_oauth = get_sp_oauth(chat_id, user_id)
+    sp_oauth = get_sp_oauth(chat_id, user_id, context.storage())
     token_info = sp_oauth.cache_handler.get_cached_token()
     if sp_oauth.validate_token(token_info) is None:
         auth_url = sp_oauth.get_authorize_url(state=state_url_safe)
@@ -499,6 +478,20 @@ async def unlink_credentials(update: Update, context: CustomCallbackContext) -> 
         )
 
 
+# TODO: Fix so it Only Works for You and in Group Chats
+async def debug_stuff(update: Update, context: CustomCallbackContext):
+    chat_id = update.effective_chat.id
+    debug = "\n".join(
+        [
+            f"Owning User ID: `{context.storage().get_user_id_from_chat_id(chat_id)}`",
+            f"Chat ID: `{context.storage().get_current_state(chat_id)}`",
+            f"Playlist: `{context.storage().get_playlist_from_dynamodb(chat_id)}`",
+            f"User ID from Channel Credentials: `{context.storage().get_user_id_from_channel_credentials(chat_id)}`",
+        ]
+    )
+    await update.message.reply_text(debug)
+
+
 def build_application(token, storage):
     logger.info(f"token: {token}")
 
@@ -527,6 +520,7 @@ def register_handlers(application: Application):
         CommandHandler("changeplaylistimage", change_playlist_image),
         CommandHandler("playlistlink", send_playlist_link),
         CommandHandler("unlink", unlink_credentials),
+        CommandHandler("debug", debug_stuff),
         MessageHandler(
             filters.TEXT & filters.Regex(spotify_link_pattern), handle_spotify_links
         ),

@@ -1,21 +1,14 @@
 import boto3
 import logging
-from .storage_interface import Storage
+from .storage_interface import BotState, Storage
 from enum import Enum
 import os
-
-class BotState(Enum):
-    AWAITING_PLAYLIST_IMAGE = "awaiting_playlist_image"
-    CHANGING_PLAYLIST_NAME = "changing_playlist_name"
-    CREATING_PLAYLIST = "creating_playlist"
-    CHANGING_PLAYLIST_IMAGE = "changing_playlist_image"
-    NO_STATE = None
 
 
 class DynamoDBStorage(Storage):
     def __init__(self):
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-        self.bot_table  = dynamodb.Table(os.getenv("BOT_TABLE"))
+        self.bot_table = dynamodb.Table(os.getenv("BOT_TABLE"))
         self.credentials_table = dynamodb.Table(os.getenv("CREDENTIALS_TABLE"))
 
     def save_current_state(self, chat_id, state_key: BotState):
