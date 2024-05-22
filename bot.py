@@ -74,37 +74,20 @@ class DynamoCredentialsCache(CacheHandler):
     def __init__(self, chat_id, user_id, storage):
         self.chat_id = chat_id
         self.user_id = user_id
-        self.credentials_table = storage.credentials_table
-        self.bot_table = storage.bot_table
+        self.storage = storage
 
     def get_cached_token(self):
         try:
-            response = self.credentials_table.get_item(
-                Key={"chat_id": str(self.chat_id)}
-            )
-            if "Item" in response:
-                return response["Item"]
-            return None
+            return self.storage.get_cached_token(self.chat_id)
         except Exception as e:
-            logging.error(f"Error retrieving from DynamoDB: {e}")
+            logging.error(f"Error retrieving cached token from DynamoDB: {e}")
             raise
 
     def save_token_to_cache(self, token_info):
         try:
-            self.credentials_table.put_item(
-                Item={
-                    "chat_id": str(self.chat_id),
-                    "user_id": self.user_id,
-                    **token_info,
-                }
-            )
-            self.bot_table.update_item(
-                Key={"chat_id": str(self.chat_id)},
-                UpdateExpression="SET user_id = :uid",
-                ExpressionAttributeValues={":uid": str(self.user_id)},
-            )
+            self.storage.save_token_to_cache(self.chat_id, self.user_id, token_info)
         except Exception as e:
-            logging.error(f"Error saving to DynamoDB: {e}")
+            logging.error(f"Error saving token to DynamoDB: {e}")
             raise
 
 
@@ -221,6 +204,7 @@ async def handle_playlist_name(update: Update, context: CustomCallbackContext) -
     user_id_credentials_table = context.storage().get_user_id_from_channel_credentials(
         chat_id
     )
+    logger.info(f"user id table: {user_id_credentials_table}, user id: {user_id} ")
 
     current_state = context.storage().get_current_state(chat_id)
     logging.info(f"the state here-pre is: {current_state}, {type(current_state)}")
@@ -388,9 +372,8 @@ async def reset_playlist(update: Update, context: CustomCallbackContext) -> None
     chat_id = update.effective_chat.id
     # Delete the playlist entry from DynamoDB
     try:
-        context.storage().bot_table.delete_item(Key={"chat_id": str(chat_id)})
-    except Exception as e:
-        logging.error(f"Error deleting from DynamoDB: {e}")
+        context.storage().delete_item(context.storage().bot_table, chat_id)
+    except Exception:
         await update.message.reply_text("Failed to reset the playlist in the database.")
         return
     await update.message.reply_text(
@@ -424,17 +407,11 @@ async def start(update: Update, context: CustomCallbackContext) -> None:
 
 async def unlink_credentials(update: Update, context: CustomCallbackContext) -> None:
     chat_id = update.effective_chat.id
-    # Log the storage object and tables
-    # logging.info(f"Storage object: {context.storage()}")
-    # logging.info(f"Credentials table: {context.storage().credentials_table}")
-    # logging.info(f"Bot table: {context.storage().bot_table}")
     try:
         # Check if the item exists in the credentials table
-        credentials_response = context.storage().credentials_table.get_item(
-            Key={"chat_id": str(chat_id)}
-        )
-        logging.info(f"Credentials get_item response: {credentials_response}")
-        if "Item" not in credentials_response:
+        if not context.storage().check_item_exists(
+            "credentials_table", chat_id
+        ):
             logging.error(f"Credentials not found for chat_id {chat_id}")
             await update.message.reply_text(
                 "Failed to unlink your Spotify credentials: credentials not found."
@@ -442,11 +419,10 @@ async def unlink_credentials(update: Update, context: CustomCallbackContext) -> 
             return
 
         # Check if the item exists in the bot table
-        bot_response = context.storage().bot_table.get_item(
-            Key={"chat_id": str(chat_id)}
-        )
-        logging.info(f"Bot get_item response: {bot_response}")
-        if "Item" not in bot_response:
+
+        if not context.storage().check_item_exists(
+            "bot_table", chat_id
+        ):
             logging.error(f"Bot data not found for chat_id {chat_id}")
             await update.message.reply_text(
                 "Failed to unlink your Spotify credentials: bot data not found."
@@ -457,14 +433,14 @@ async def unlink_credentials(update: Update, context: CustomCallbackContext) -> 
         logging.info(
             f"Attempting to delete item from credentials table for chat_id {chat_id}"
         )
-        credentials_delete_response = context.storage().credentials_table.delete_item(
-            Key={"chat_id": str(chat_id)}
+        credentials_delete_response = context.storage().delete_item(
+            "credentials_table", chat_id
         )
         logging.info(f"Credentials delete_item response: {credentials_delete_response}")
 
         logging.info(f"Attempting to delete item from bot table for chat_id {chat_id}")
-        bot_delete_response = context.storage().bot_table.delete_item(
-            Key={"chat_id": str(chat_id)}
+        bot_delete_response = context.storage().delete_item(
+            "bot_table", chat_id
         )
         logging.info(f"Bot delete_item response: {bot_delete_response}")
 

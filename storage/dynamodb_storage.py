@@ -1,7 +1,6 @@
 import boto3
 import logging
 from .storage_interface import BotState, Storage
-from enum import Enum
 import os
 
 
@@ -103,3 +102,47 @@ class DynamoDBStorage(Storage):
                 f"Error retrieving user ID from DynamoDB for chat_id: {chat_id}, error: {e}"
             )
             return None
+
+    def get_cached_token(self, chat_id):
+        try:
+            response = self.credentials_table.get_item(Key={"chat_id": str(chat_id)})
+            if "Item" in response:
+                return response["Item"]
+            return None
+        except Exception as e:
+            logging.error(f"Error retrieving cached token from DynamoDB: {e}")
+            raise
+
+    def save_token_to_cache(self, chat_id, user_id, token_info):
+        try:
+            self.credentials_table.put_item(
+                Item={
+                    "chat_id": str(chat_id),
+                    "user_id": user_id,
+                    **token_info,
+                }
+            )
+            self.bot_table.update_item(
+                Key={"chat_id": str(chat_id)},
+                UpdateExpression="SET user_id = :uid",
+                ExpressionAttributeValues={":uid": str(user_id)},
+            )
+        except Exception as e:
+            logging.error(f"Error saving token to DynamoDB: {e}")
+            raise
+
+    def delete_item(self, table, chat_id):
+        try:
+            table.delete_item(Key={"chat_id": str(chat_id)})
+        except Exception as e:
+            logging.error(f"Error deleting item from DynamoDB: {e}")
+            raise
+
+    def check_item_exists(self, table, chat_id):
+        try:
+            response = table.get_item(Key={"chat_id": str(chat_id)})
+            logging.info(f"check_item_exists: {response}")
+            return "Item" in response
+        except Exception as e:
+            logging.error(f"Error checking item in DynamoDB: {e}")
+            raise

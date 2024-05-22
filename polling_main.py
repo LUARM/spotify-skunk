@@ -6,6 +6,7 @@ from bot import handle_spotify_auth
 import logging
 from flask import Response
 from storage.dynamodb_storage import DynamoDBStorage
+from storage.in_memory_storage import InMemoryStorage
 
 webserver = Flask(__name__)
 
@@ -38,10 +39,10 @@ if __name__ == "__main__":
 
     # Initialize storage
     dynamodb_storage = DynamoDBStorage()
-    # in_memory_storage = InMemoryStorage()
+    in_memory_storage = InMemoryStorage()
 
     # TODO: Use DynamoDB storage for production, in-memory storage for testing
-    storage = dynamodb_storage
+    storage = in_memory_storage
 
     application = build_application(TOKEN, storage)
 
