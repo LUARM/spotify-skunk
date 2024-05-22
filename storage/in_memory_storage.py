@@ -1,76 +1,116 @@
-from .storage_interface import Storage
 import logging
+from .storage_interface import BotState, Storage
+
 
 class InMemoryStorage(Storage):
     def __init__(self):
-        self.state = {}
-        self.playlists = {}
-        self.users = {}
-        self.tokens = {}
+        self.bot_table = {}
+        self.credentials_table = {}
 
-    def save_current_state(self, chat_id, state_key):
-        self.state[chat_id] = state_key
-        logging.info(f"Saved state for chat_id {chat_id}: {state_key}")
+    def save_current_state(self, chat_id, state_key: BotState):
+        try:
+            user_id = self.get_user_id_from_chat_id(chat_id)
+            if user_id is None:
+                user_id = self.get_user_id_from_channel_credentials(chat_id)
+
+            if state_key is BotState.NO_STATE:
+                if str(chat_id) in self.bot_table:
+                    self.bot_table[str(chat_id)].pop("current_state", None)
+            else:
+                if str(chat_id) not in self.bot_table:
+                    self.bot_table[str(chat_id)] = {}
+                self.bot_table[str(chat_id)]["current_state"] = state_key.value
+                self.bot_table[str(chat_id)]["user_id"] = user_id
+
+            logging.info(
+                f"Updated state in InMemoryStorage: {self.bot_table[str(chat_id)]}"
+            )
+        except Exception as e:
+            logging.error(f"Error saving current state to InMemoryStorage: {e}")
 
     def get_current_state(self, chat_id):
-        state = self.state.get(chat_id, None)
-        logging.info(f"Retrieved state for chat_id {chat_id}: {state}")
-        return state
+        try:
+            item = self.bot_table.get(str(chat_id), {})
+            if "current_state" in item:
+                state_value = item["current_state"]
+                return BotState(state_value)
+            return None
+        except Exception as e:
+            logging.error(f"Error retrieving current state from InMemoryStorage: {e}")
+            return None
 
     def save_playlist_to_dynamodb(self, chat_id, playlist_id):
-        self.playlists[chat_id] = playlist_id
-        logging.info(f"Saved playlist for chat_id {chat_id}: {playlist_id}")
+        try:
+            if str(chat_id) not in self.bot_table:
+                self.bot_table[str(chat_id)] = {}
+            self.bot_table[str(chat_id)]["playlist_id"] = playlist_id
+            self.bot_table[str(chat_id)]["user_id"] = self.get_user_id_from_chat_id(
+                chat_id
+            )
+        except Exception as e:
+            logging.error(f"Error saving to InMemoryStorage: {e}")
 
     def get_playlist_from_dynamodb(self, chat_id):
-        playlist = self.playlists.get(chat_id, None)
-        logging.info(f"Retrieved playlist for chat_id {chat_id}: {playlist}")
-        return playlist
+        try:
+            item = self.bot_table.get(str(chat_id), {})
+            return item.get("playlist_id")
+        except Exception as e:
+            logging.error(f"Error retrieving from InMemoryStorage: {e}")
+            return None
 
     def get_user_id_from_chat_id(self, chat_id):
-        user_id = self.users.get(chat_id, None)
-        logging.info(f"Retrieved user_id from chat_id for chat_id {chat_id}: {user_id}")
-        return user_id
+        try:
+            item = self.bot_table.get(str(chat_id), {})
+            return item.get("user_id")
+        except Exception as e:
+            logging.error(
+                f"Error retrieving user ID from InMemoryStorage for chat_id: {chat_id}, error: {e}"
+            )
+            return None
 
     def get_user_id_from_channel_credentials(self, chat_id):
-        token_info = self.tokens.get(chat_id, None)
-        user_id = token_info['user_id'] if token_info else None
-        logging.info(f"get_user_id_from_channel_credentials: Retrieved user_id {user_id} for chat_id: {chat_id}")
-        return user_id
+        try:
+            item = self.credentials_table.get(str(chat_id), {})
+            return item.get("user_id")
+        except Exception as e:
+            logging.error(
+                f"Error retrieving user ID from InMemoryStorage for chat_id: {chat_id}, error: {e}"
+            )
+            return None
 
     def get_cached_token(self, chat_id):
-        token = self.tokens.get(chat_id, None)
-        logging.info(f"Retrieved token for chat_id {chat_id}: {token}")
-        return token
+        try:
+            return self.credentials_table.get(str(chat_id))
+        except Exception as e:
+            logging.error(f"Error retrieving cached token from InMemoryStorage: {e}")
+            raise
 
     def save_token_to_cache(self, chat_id, user_id, token_info):
-        self.tokens[chat_id] = {'user_id': user_id, **token_info}
-        self.users[chat_id] = user_id  # Save user ID to users dictionary
-        logging.info(f"Saved token for chat_id {chat_id}: {self.tokens[chat_id]}")
-        logging.info(f"Saved user_id for chat_id {chat_id}: {user_id}")
+        try:
+            self.credentials_table[str(chat_id)] = {
+                "chat_id": str(chat_id),
+                "user_id": user_id,
+                **token_info,
+            }
+            if str(chat_id) not in self.bot_table:
+                self.bot_table[str(chat_id)] = {}
+            self.bot_table[str(chat_id)]["user_id"] = str(user_id)
+        except Exception as e:
+            logging.error(f"Error saving token to InMemoryStorage: {e}")
+            raise
 
     def delete_item(self, table, chat_id):
-        if table == "credentials_table":
-            if chat_id in self.tokens:
-                del self.tokens[chat_id]
-                logging.info(f"Deleted token for chat_id {chat_id} from credentials_table")
-        elif table == "bot_table":
-            if chat_id in self.state:
-                del self.state[chat_id]
-                logging.info(f"Deleted state for chat_id {chat_id} from bot_table")
-            if chat_id in self.playlists:
-                del self.playlists[chat_id]
-                logging.info(f"Deleted playlist for chat_id {chat_id} from bot_table")
-            if chat_id in self.users:
-                del self.users[chat_id]
-                logging.info(f"Deleted user for chat_id {chat_id} from bot_table")
+        try:
+            table.pop(str(chat_id), None)
+        except Exception as e:
+            logging.error(f"Error deleting item from InMemoryStorage: {e}")
+            raise
 
     def check_item_exists(self, table, chat_id):
-        if table == "credentials_table":
-            exists = chat_id in self.tokens
-            logging.info(f"Checked if token exists for chat_id {chat_id} in credentials_table: {exists}")
+        try:
+            exists = str(chat_id) in table
+            logging.info(f"check_item_exists: {exists}")
             return exists
-        elif table == "bot_table":
-            exists = chat_id in self.state or chat_id in self.playlists or chat_id in self.users
-            logging.info(f"Checked if item exists for chat_id {chat_id} in bot_table: {exists}")
-            return exists
-        return False
+        except Exception as e:
+            logging.error(f"Error checking item in InMemoryStorage: {e}")
+            raise
