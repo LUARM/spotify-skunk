@@ -7,6 +7,7 @@ import os
 import json
 import traceback
 from telegram import Update
+from storage.dynamodb_storage import DynamoDBStorage
 
 if logging.getLogger().hasHandlers():
     logging.getLogger().setLevel(logging.INFO)
@@ -14,6 +15,7 @@ else:
     logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
+storage = DynamoDBStorage()
 
 def lambda_handler(event, context):
     logger.info(f"Event body type: {type(event)}")
@@ -36,7 +38,7 @@ def handle_spotify_event(event):
 
     if not state_encoded or not code:
         return {"statusCode": 400, "body": "Missing required parameters"}
-    handle_spotify_auth(state_encoded, code)
+    handle_spotify_auth(state_encoded, code, storage)
     html_content = load_html_file("index.html")
     return {
         "statusCode": 200,
@@ -47,7 +49,8 @@ def handle_spotify_event(event):
 
 async def main(event, context):
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    application = build_application(TOKEN)
+
+    application = build_application(TOKEN, storage)
 
     # Convert the incoming event to a Telegram Update object
     if isinstance(event["body"], str):

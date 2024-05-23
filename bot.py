@@ -409,9 +409,7 @@ async def unlink_credentials(update: Update, context: CustomCallbackContext) -> 
     chat_id = update.effective_chat.id
     try:
         # Check if the item exists in the credentials table
-        if not context.storage().check_item_exists(
-            "credentials_table", chat_id
-        ):
+        if not context.storage().check_item_exists("credentials_table", chat_id):
             logging.error(f"Credentials not found for chat_id {chat_id}")
             await update.message.reply_text(
                 "Failed to unlink your Spotify credentials: credentials not found."
@@ -420,9 +418,7 @@ async def unlink_credentials(update: Update, context: CustomCallbackContext) -> 
 
         # Check if the item exists in the bot table
 
-        if not context.storage().check_item_exists(
-            "bot_table", chat_id
-        ):
+        if not context.storage().check_item_exists("bot_table", chat_id):
             logging.error(f"Bot data not found for chat_id {chat_id}")
             await update.message.reply_text(
                 "Failed to unlink your Spotify credentials: bot data not found."
@@ -439,9 +435,7 @@ async def unlink_credentials(update: Update, context: CustomCallbackContext) -> 
         logging.info(f"Credentials delete_item response: {credentials_delete_response}")
 
         logging.info(f"Attempting to delete item from bot table for chat_id {chat_id}")
-        bot_delete_response = context.storage().delete_item(
-            "bot_table", chat_id
-        )
+        bot_delete_response = context.storage().delete_item("bot_table", chat_id)
         logging.info(f"Bot delete_item response: {bot_delete_response}")
 
         await update.message.reply_text(
