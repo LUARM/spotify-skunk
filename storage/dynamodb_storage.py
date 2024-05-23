@@ -133,16 +133,26 @@ class DynamoDBStorage(Storage):
 
     def delete_item(self, table, chat_id):
         try:
-            table.delete_item(Key={"chat_id": str(chat_id)})
+            if table == "credentials_table":
+                response = self.credentials_table.delete_item(Key={"chat_id": str(chat_id)})
+                logging.info(f"Deleted item from credentials_table for chat_id {chat_id}: {response}")
+            elif table == "bot_table":
+                response = self.bot_table.delete_item(Key={"chat_id": str(chat_id)})
+                logging.info(f"Deleted item from bot_table for chat_id {chat_id}: {response}")
         except Exception as e:
             logging.error(f"Error deleting item from DynamoDB: {e}")
-            raise
 
     def check_item_exists(self, table, chat_id):
         try:
-            response = table.get_item(Key={"chat_id": str(chat_id)})
-            logging.info(f"check_item_exists: {response}")
-            return "Item" in response
+            if table == "credentials_table":
+                response = self.credentials_table.get_item(Key={"chat_id": str(chat_id)})
+                logging.info(f"Checked item in credentials_table for chat_id {chat_id}: {response}")
+                return "Item" in response
+            elif table == "bot_table":
+                response = self.bot_table.get_item(Key={"chat_id": str(chat_id)})
+                logging.info(f"Checked item in bot_table for chat_id {chat_id}: {response}")
+                return "Item" in response
+            return False
         except Exception as e:
             logging.error(f"Error checking item in DynamoDB: {e}")
-            raise
+            return False
